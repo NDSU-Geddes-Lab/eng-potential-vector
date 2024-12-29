@@ -1,0 +1,69 @@
+---
+title: "Plasmid_ID_Cleanup"
+output:
+  html_notebook: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+This is a script for taking input data from plasmid_id python script used to process individual nodules in wells and produce output data regarding the frequency of plasmid_id occurence in nodules and number of mixed nodules.
+
+```{r}
+library(tidyverse)
+library(dplyr)
+```
+
+Imports data for processing. 
+*****change path to the input data.
+
+```{r}
+input_data <- read.csv("C:/Users/Riley/OneDrive/Desktop/240528_PlasmidID_analysis/MasterScripts_240528/R_Studio/240528_Analysis/Gm50_3_RW_Clean.csv") 
+```
+
+removes all values that did not detect forward or reverse barcode or plasmid ID (presumably due to sequencing errors)
+
+```{r}
+clean_data <-filter(input_data, fw_name != "none", rev_name != "none", pl_name != "none")
+
+clean_data2 <-unite(clean_data, col="well", c("fw_name", "rev_name"), sep="_")
+
+clean_data3 <- subset(clean_data2, select = -c(mean))
+```
+
+changes table configuration
+
+```{r}
+wider_data <- pivot_wider(clean_data3, names_from = pl_name, values_from = count)
+```
+
+sets the wells to rows
+
+```{r}
+wider_data2 <- column_to_rownames(wider_data, var = "well")
+```
+
+adds a column with the sum of for each well
+
+```{r}
+wider_data3 <- wider_data2 %>% replace(is.na(.), 0)%>%
+  mutate(wider_data2, sum = rowSums(.))
+```
+
+moves the well label to row title
+
+```{r}
+wider_data4 <- rownames_to_column(wider_data3, var = "well")
+```
+
+changes the table composition to allow calculation of relative abundance
+
+```{r}
+longer_data <- wider_data4 %>%
+  pivot_longer(cols=starts_with("rbc"), 
+               names_to = "id_name",
+               values_to = "id",
+               values_drop_na = TRUE
+  )
+```

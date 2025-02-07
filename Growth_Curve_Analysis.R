@@ -14,14 +14,14 @@
 #
 #   (ranges do not include donor)
 
-setwd("C:/Users/Riley/OneDrive/Desktop/Growth Curve Analysis/")
+setwd("")
 
-install.packages("cowplot")
-library(cowplot)
 library(tidyverse)
 library(readxl)
+library(ggforce)
 
-# TODO: Create the data frame using a nested loop
+#input_file <- "Growth_Curve_Data_RW.xlsx"  # Blank removed
+input_file <- "241015_RW_GrowthCurveData.xlsx"  # Blank not removed
 
 # Define variables
 antibiotics <- c("Gm50","Nm50","Tc20")
@@ -48,7 +48,7 @@ for (a in antibiotics) {
       }
       
       # Read data
-      dat <- read_excel("C:/Users/Riley/OneDrive/Desktop/241015_RW_GrowthCurveData.xlsx", range=paste0(sheet,cells))
+      dat <- read_excel(input_file, range=paste0(sheet,cells))
       
       # Transpose and remove row for time
       dat <- as.data.frame(t(dat)[-1,])
@@ -71,62 +71,6 @@ colnames(all_data) <- c("t1","t2","t3","t4","t5","t6",
                         "strain","antibiotic","treatment","measure")
 all_data <- all_data[,c(7:10,1:6)]
 
-# Compute fold change for RFU and OD
-rfu <- all_data %>%
-  filter(measure == "rfu") %>%
-  group_by(strain, antibiotic, treatment) %>%
-  summarise(delta_rfu=log(t2/t1, 10)) # Change t2/t1 to compare different time points
-
-od <- all_data %>%
-  filter(measure == "od") %>%
-  group_by(strain, antibiotic, treatment) %>%
-  summarise(delta_od=t2/t1)
-
-df <- full_join(od, rfu, by=c("strain","antibiotic","treatment"))
-
-# Plotting
-ggplot(data=df, aes(delta_rfu, delta_od, color=treatment)) +
-  geom_point() +
-  facet_wrap(~antibiotic)
-
-# Subtract values for RFU and OD of control from engineered samples
-df2 <- df %>%
-  pivot_wider(names_from = treatment, values_from = c(delta_od, delta_rfu)) %>%
-  group_by(strain, antibiotic) %>%
-  summarise(od=(delta_od_eng - delta_od_ctrl),
-            rfu=(delta_rfu_eng - delta_rfu_ctrl))
-
-ggplot(data=df2, aes(rfu, od, color=antibiotic, label=strain)) + 
-  geom_point() + geom_text() +
-  facet_wrap(~antibiotic)
-
-# Create separate data frames for OD and RFU data
-od_all <- all_data %>% 
-  filter(measure == "od") %>%
-  select(-measure) %>%
-  pivot_longer(cols = c("t1","t2","t3","t4","t5","t6"),
-               names_to = "time", 
-               names_prefix = "t", 
-               names_transform = list(time = as.factor), 
-               values_to = "od")
-
-rfu_all <- all_data %>% 
-  filter(measure == "rfu") %>%
-  select(-measure) %>%
-  pivot_longer(cols = c("t1","t2","t3","t4","t5","t6"),
-               names_to = "time", 
-               names_prefix = "t", 
-               names_transform = list(time = as.factor), 
-               values_to = "rfu")
-
-# And plot some basic boxplots
-ggplot(data=od_all, aes(time, od, color=treatment)) +
-  geom_boxplot() +
-  facet_wrap(~antibiotic)
-  
-ggplot(data=rfu_all, aes(time, log(rfu, 10), color=treatment)) +
-  geom_boxplot()
-
 # Convert data to long format
 long_data <- all_data %>%
   pivot_longer(cols = c("t1","t2","t3","t4","t5","t6"),
@@ -136,22 +80,160 @@ long_data <- all_data %>%
   pivot_wider(names_from = "measure",
               values_from = "value")
 
-p <- ggplot(data=long_data, aes(log(rfu, 10), od, color=treatment)) +
-  geom_point(size=0.3) +  # Adjust the size of the points if needed
-  facet_grid(time ~ antibiotic) +
-  scale_color_manual(values = c("eng" = "turquoise4", "ctrl" = "purple3")) +
-  scale_x_continuous(labels = scales::label_math(expr = 10^.x)  # Converts log values back to powers of 10
-  ) +
-  theme_minimal()  # Removes grey background and uses a minimal theme
+# OD/RFU for control vs. engineered, by antibiotic and time
+ggplot(data=long_data, aes(log(rfu,10), od, color=treatment)) +
+  geom_point() +
+  facet_grid(time~antibiotic)
 
-# Save the plot as a PNG file with a transparent background
-ggsave("super_plot.png", plot = p, bg = "transparent", width = 6, height = 4, dpi = 300)
+# Subtract treatment from control at t6
+wide_data <- long_data %>%
+  pivot_wider(names_from = "treatment",
+              values_from = c("od","rfu")) %>% 
+  mutate(delta_od = od_eng - od_ctrl,
+         delta_rfu = log(rfu_eng,10) - log(rfu_ctrl,10))
+
+eng_labels <- read_excel("241021_Strain_Engineerability_with_class.xlsx")
+
+wide_data_labeled <- wide_data %>%
+  full_join(eng_labels, by="strain") %>%
+  mutate(gm50_eng = (gm50 == "Yes")*1,
+         nm50_eng = (nm50 == "Yes")*1,
+         tc20_eng = (tc20 == "Yes")*1,
+         eng = (engineered == "Yes")*1)
+
+# OD/RFU by antibiotic and time, control-subtracted with ground truth labels
+ggplot(data=wide_data_labeled, aes(delta_rfu, delta_od, colour=engineered)) +
+  geom_point() +
+  facet_grid(time~antibiotic)
+
+# Now create a separate data framge for each antibiotic
+wide_data_gm50 <- wide_data_labeled %>% filter(antibiotic == "gm50")
+wide_data_nm50 <- wide_data_labeled %>% filter(antibiotic == "nm50")
+wide_data_tc20 <- wide_data_labeled %>% filter(antibiotic == "tc20")
+
+# Plot separation of eng vs. non-eng over time for each antibiotic
+
+# All time points
+# Gm50
+ggplot(data=wide_data_gm50, aes(delta_rfu, delta_od, colour=gm50)) +
+  geom_point() +
+  facet_wrap(~time)
+
+# Nm50
+ggplot(data=wide_data_nm50, aes(delta_rfu, delta_od, colour=nm50)) +
+  geom_point() +
+  facet_wrap(~time)
+
+
+# Tc20
+ggplot(data=wide_data_tc20, aes(delta_rfu, delta_od, colour=tc20)) +
+  geom_point() +
+  facet_wrap(~time)
+
+
+# time 6 only, with ellipses
+# Gm50
+ggplot(data=filter(wide_data_gm50, time==6), aes(delta_rfu, delta_od, colour=gm50)) +
+  geom_point() + geom_mark_ellipse() + 
+  xlab(expression(Delta ~ "RFU")) +
+  ylab(expression(Delta ~ "OD")) +
+  ggtitle("Gm50") + 
+  guides(color = guide_legend(title = "Engineered")) +
+  theme(text = element_text(size=14),
+        axis.text = element_text(size=12), 
+        legend.text = element_text(size=12),
+        plot.title = element_text(hjust=0.5))
   
-       
-       
-       
-       
-       
-       
-       
-       
+# Nm50
+ggplot(data=filter(wide_data_nm50, time==6), aes(delta_rfu, delta_od, colour=nm50)) +
+  geom_point() + geom_mark_ellipse() + 
+  xlab(expression(Delta ~ "RFU")) +
+  ylab(expression(Delta ~ "OD")) +
+  ggtitle("Nm50") + 
+  guides(color = guide_legend(title = "Engineered")) +
+  theme(text = element_text(size=14),
+        axis.text = element_text(size=12), 
+        legend.text = element_text(size=12),
+        plot.title = element_text(hjust=0.5))
+
+# Tc20
+ggplot(data=filter(wide_data_tc20, time==6), aes(delta_rfu, delta_od, colour=tc20)) +
+  geom_point() + geom_mark_ellipse() + 
+  xlab(expression(Delta ~ "RFU")) +
+  ylab(expression(Delta ~ "OD")) +
+  ggtitle("Tc20") + 
+  guides(color = guide_legend(title = "Engineered")) +
+  theme(text = element_text(size=14),
+        axis.text = element_text(size=12), 
+        legend.text = element_text(size=12),
+        plot.title = element_text(hjust=0.5))
+
+
+# Statistical modeling with logistic regression
+# Modeling on deltaOD and deltaRFU
+# Gm50
+mod_gm50 <- glm(gm50_eng ~ delta_od + delta_rfu, 
+                family = "binomial", 
+                data = filter(wide_data_gm50, time == 6))
+summary(mod_gm50)
+pchisq(mod_gm50$deviance, mod_gm50$df.residual, lower.tail = F)
+# Plot residuals (2x2 grid)
+par(mfrow=c(2,2))
+plot(mod_gm50, main="Gm50")
+par(mfrow=c(1,1))
+
+# Nm50
+mod_nm50 <- glm(nm50_eng ~ delta_od + delta_rfu, 
+                family = "binomial", 
+                data = filter(wide_data_nm50, time == 6))
+summary(mod_nm50)
+pchisq(mod_nm50$deviance, mod_nm50$df.residual, lower.tail = F)
+# Plot residuals (2x2 grid)
+par(mfrow=c(2,2))
+plot(mod_nm50, main="Nm50")
+par(mfrow=c(1,1))
+
+# Tc20
+mod_tc20 <- glm(tc20_eng ~ delta_od + delta_rfu, 
+                family = "binomial", 
+                data = filter(wide_data_tc20, time == 6))
+summary(mod_tc20)
+pchisq(mod_tc20$deviance, mod_tc20$df.residual, lower.tail = F)
+# Plot residuals (2x2 grid)
+par(mfrow=c(2,2))
+plot(mod_tc20, main="Tc20")
+par(mfrow=c(1,1))
+
+# Modeling based on taxonomic class
+# Gm50
+mod_gm50_class <- glm(gm50_eng ~ 0 + class, 
+                family = "binomial", 
+                data = filter(wide_data_gm50, time == 6))
+summary(mod_gm50_class)
+pchisq(mod_gm50_class$deviance, mod_gm50_class$df.residual, lower.tail = F)
+# Plot residuals (2x2 grid)
+par(mfrow=c(2,2))
+plot(mod_gm50_class, main="Gm50")
+par(mfrow=c(1,1))
+
+# Nm50
+mod_nm50_class <- glm(nm50_eng ~ 0 + class, 
+                family = "binomial", 
+                data = filter(wide_data_nm50, time == 6))
+summary(mod_nm50_class)
+pchisq(mod_nm50_class$deviance, mod_nm50_class$df.residual, lower.tail = F)
+# Plot residuals (2x2 grid)
+par(mfrow=c(2,2))
+plot(mod_nm50_class, main="Nm50")
+par(mfrow=c(1,1))
+
+# Tc20
+mod_tc20_class <- glm(tc20_eng ~ 0 + class, 
+                family = "binomial", 
+                data = filter(wide_data_tc20, time == 6))
+summary(mod_tc20_class)
+pchisq(mod_tc20_class$deviance, mod_tc20_class$df.residual, lower.tail = F)
+# Plot residuals (2x2 grid)
+par(mfrow=c(2,2))
+plot(mod_tc20_class, main="Tc20")
+par(mfrow=c(1,1))
